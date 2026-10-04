@@ -24,6 +24,7 @@ RUN apt-get update && \
 # IMPORTANT:
 # Do NOT install xformers, sageattention or flash-attn here.
 RUN pip install --no-cache-dir \
+        --ignore-installed cryptography \
         misaki[en] \
         "huggingface_hub[hf_transfer]" \
         runpod \
