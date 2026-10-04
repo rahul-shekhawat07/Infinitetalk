@@ -1,57 +1,83 @@
-# Single-stage build: runtime with ComfyUI + custom nodes
-# Models are downloaded at startup (not baked into the image) to keep image small
-# Base includes: CUDA 12.8.1, cuDNN, Python 3.12, PyTorch 2.8.0, torchvision, torchaudio
+# InfiniteTalk RunPod Serverless
+# L4 / CUDA 12.8 / PyTorch 2.8
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 SHELL ["/bin/bash", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
-# System packages (ffmpeg for video, git-lfs for model downloads, libgl1 for OpenCV)
-RUN apt-get update --yes && \
-    apt-get install --yes --no-install-recommends ffmpeg git-lfs libgl1 && \
-    apt-get autoremove -y && \
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        git \
+        git-lfs \
+        libgl1 \
+        libglib2.0-0 \
+        libsndfile1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Python dependencies (consolidated into one layer)
-# flash_attn: prebuilt wheel for Python 3.12 + CUDA 12.8 + PyTorch 2.8 (NO source compile)
-RUN pip install --no-cache-dir xformers sageattention \
-        misaki[en] "huggingface_hub[hf_transfer]" \
-        runpod websocket-client librosa && \
-    pip install --no-cache-dir \
-        "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.8-cp312-cp312-manylinux_2_24_x86_64.whl"
+# Basic Python dependencies
+# IMPORTANT:
+# Do NOT install xformers, sageattention or flash-attn here.
+RUN pip install --no-cache-dir \
+        misaki[en] \
+        "huggingface_hub[hf_transfer]" \
+        runpod \
+        websocket-client \
+        librosa
 
 WORKDIR /
 
-# ComfyUI core (strip frontend packages we don't need for headless serverless)
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git && \
+# ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /ComfyUI && \
     cd /ComfyUI && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip uninstall -y comfyui-frontend-package comfyui-workflow-templates \
-        comfyui-workflow-templates-core comfyui-workflow-templates-media-api \
-        comfyui-workflow-templates-media-image comfyui-workflow-templates-media-other \
-        comfyui-workflow-templates-media-video comfyui-embedded-docs 2>/dev/null || true
+    pip install --no-cache-dir -r requirements.txt
 
-# Custom nodes (clone all, then install requirements)
+# Remove unnecessary frontend packages for headless Serverless use
+RUN pip uninstall -y \
+        comfyui-frontend-package \
+        comfyui-workflow-templates \
+        comfyui-workflow-templates-core \
+        comfyui-workflow-templates-media-api \
+        comfyui-workflow-templates-media-image \
+        comfyui-workflow-templates-media-other \
+        comfyui-workflow-templates-media-video \
+        comfyui-embedded-docs \
+        2>/dev/null || true
+
+# Custom nodes
 RUN cd /ComfyUI/custom_nodes && \
     git clone https://github.com/city96/ComfyUI-GGUF && \
     git clone https://github.com/kijai/ComfyUI-KJNodes && \
     git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite && \
     git clone https://github.com/orssorbit/ComfyUI-wanBlockswap && \
     git clone https://github.com/kijai/ComfyUI-MelBandRoFormer && \
-    git clone https://github.com/kijai/ComfyUI-WanVideoWrapper && \
-    cd ComfyUI-GGUF && pip install --no-cache-dir -r requirements.txt && \
-    cd ../ComfyUI-KJNodes && pip install --no-cache-dir -r requirements.txt && \
-    cd ../ComfyUI-VideoHelperSuite && pip install --no-cache-dir -r requirements.txt && \
-    cd ../ComfyUI-MelBandRoFormer && pip install --no-cache-dir -r requirements.txt && \
-    cd ../ComfyUI-WanVideoWrapper && pip install --no-cache-dir -r requirements.txt && \
-    find /ComfyUI -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    git clone https://github.com/kijai/ComfyUI-WanVideoWrapper
+
+# Install custom-node requirements
+RUN cd /ComfyUI/custom_nodes/ComfyUI-GGUF && \
+    pip install --no-cache-dir -r requirements.txt && \
+    cd /ComfyUI/custom_nodes/ComfyUI-KJNodes && \
+    pip install --no-cache-dir -r requirements.txt && \
+    cd /ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite && \
+    pip install --no-cache-dir -r requirements.txt && \
+    cd /ComfyUI/custom_nodes/ComfyUI-MelBandRoFormer && \
+    pip install --no-cache-dir -r requirements.txt && \
+    cd /ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Remove git metadata and Python cache
+RUN find /ComfyUI -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true && \
     find /ComfyUI -name "*.pyc" -delete 2>/dev/null || true && \
     find /ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Handler files
-COPY . .
+# Copy worker files
+COPY . /
+
 RUN chmod +x /entrypoint.sh
 
 ENV RUNPOD_PING_INTERVAL=3000
